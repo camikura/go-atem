@@ -1,6 +1,7 @@
 package atem
 
 import (
+	_ "bytes"
 	"encoding/binary"
 	"fmt"
 	"log"
@@ -11,22 +12,26 @@ import (
 type Callback func()
 
 type Device struct {
-	address   string
-	conn      net.Conn
-	callbacks map[string][]Callback
-	state     uint16
-	sid       uint16
-	lpid      uint16
-	debug     bool
+	localAddr  net.Addr
+	remoteAddr net.Addr
+	conn       net.PacketConn
+	callbacks  map[string][]Callback
+	connState  uint16
+	sid        uint16
+	lpid       uint16
+	debug      bool
 
 	inPacket  chan []byte
 	outPacket chan []byte
+
+	topology Topology
+	status   Status
 }
 
 const (
-	stateClosed      = 0x01
-	stateSynsent     = 0x02
-	stateEstablished = 0x03
+	connStateClosed      = 0x01
+	connStateSynsent     = 0x02
+	connStateEstablished = 0x03
 )
 
 const (
@@ -37,16 +42,21 @@ const (
 	flagAck     = 0x16
 )
 
-type packet []byte
+type Topology struct {
+	mes, sources, colors, auxs, dsks, stingers, dves, supersources int
+}
+
+type Status struct {
+	prgi, prvi [4]int
+}
 
 var helloPacket = []byte{0x10, 0x14, 0x0e, 0x58, 0x00, 0x00, 0x00, 0x00, 0x00, 0x26, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
 var answerPacket = []byte{0x80, 0x0c, 0x0e, 0x58, 0x00, 0x00, 0x00, 0x00, 0x00, 0xfd, 0x00, 0x00}
 
 func NewDevice(ip string, port int, debug bool) *Device {
-	address := fmt.Sprintf("%s:%d", ip, port)
+	addr, _ := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", ip, port))
 	callbacks := map[string][]Callback{}
-
-	return &Device{address: address, state: stateClosed, callbacks: callbacks, debug: debug}
+	return &Device{remoteAddr: addr, connState: connStateClosed, callbacks: callbacks, debug: debug}
 }
 
 func (d *Device) On(e string, cb func()) {
@@ -66,13 +76,18 @@ func (d *Device) Connect() {
 }
 
 func (d *Device) connect() error {
-	conn, err := net.Dial("udp", d.address)
+	conn, err := net.Dial("udp", d.remoteAddr.String())
 	if err != nil {
-		log.Fatalln(err)
 		return err
 	}
 
-	d.conn = conn
+	fmt.Println(conn.LocalAddr().String())
+	addr := conn.LocalAddr().String()
+	d.conn, err = net.ListenPacket("udp", addr)
+	if err != nil {
+		return err
+	}
+
 	defer d.conn.Close()
 
 	//d.inPacket = make(chan []byte)
@@ -92,9 +107,9 @@ func (d *Device) waitPacket() {
 
 	go func(f chan bool) {
 		for {
-			b := make([]byte, 2060)
-			//d.conn.SetReadDeadline(time.Now().Add(time.Second))
-			l, _ := d.conn.Read(b)
+			b := make([]byte, 4096)
+			d.conn.SetReadDeadline(time.Now().Add(time.Second * 3))
+			l, _, _ := d.conn.ReadFrom(b)
 			if l > 0 {
 				d.recvPacket(b[:l])
 				// d.inPacket <- b[:l]
@@ -109,46 +124,60 @@ func (d *Device) recvPacket(p []byte) {
 	flag := int(p[0] >> 3)
 
 	if flag&flagConnect > 0 && flag&flagRepeat == 0 {
+		log.Println("Recv:", p)
 		d.sendPacketAnswer()
 	}
 
 	if flag&flagSync > 0 {
 		if len(p) > 12 {
-			d.parseCommand(p[12:])
+			d.parseCommand(p[12:], p[:12])
 		}
 		if len(p) == 12 {
-			if d.state == stateSynsent {
-				d.state = stateEstablished
-				fmt.Println("connected!!!")
-			} else {
+			if d.connState == connStateSynsent {
 				d.readSid(p)
+				d.connState = connStateEstablished // connected
+			} else {
+				log.Println("Recv:", p)
 				d.sendPacketPong(p)
 			}
 		}
 	}
 }
 
-func (d *Device) parseCommand(p []byte) {
-	fmt.Println(len(p))
-	dlen := binary.BigEndian.Uint16(p[0:2])
-	name := string(p[4:8])
-	d.readCommand(name, p[8:dlen])
+func (d *Device) parseCommand(p []byte, h []byte) {
+	m := binary.BigEndian.Uint16(p[0:2]) // length of command
+	n := string(p[4:8])                  // name of command
 
-	if len(p) > int(dlen) {
-		d.parseCommand(p[dlen:])
+	d.readCommand(n, p[8:m], h)
+
+	// for multiple command
+	if len(p) > int(m) {
+		d.parseCommand(p[m:], p[m:m+12])
 	}
 }
 
-func (d *Device) readCommand(n string, p []byte) {
+func (d *Device) readCommand(n string, p []byte, h []byte) {
 	switch n {
+	case "_top":
+		d.topology.mes = int(p[0])
+		d.topology.sources = int(p[1])
+		d.topology.colors = int(p[2])
+		d.topology.auxs = int(p[3])
+		d.topology.dsks = int(p[4])
+		d.topology.stingers = int(p[5])
+		d.topology.dves = int(p[6])
+		d.topology.supersources = int(p[7])
+		log.Println("_top:", d.topology)
 	case "PrgI":
-		me := p[0]
-		input := binary.BigEndian.Uint16(p[2:4])
-		fmt.Printf("PrgI: %d %d\n", me, input)
+		me := int(p[0])
+		d.status.prgi[me] = int(binary.BigEndian.Uint16(p[2:4]))
+		log.Println("PrgI:", d.status)
 	case "PrvI":
-		me := p[0]
-		input := binary.BigEndian.Uint16(p[2:4])
-		fmt.Printf("PrvI: %d %d\n", me, input)
+		me := int(p[0])
+		d.status.prvi[me] = int(binary.BigEndian.Uint16(p[2:4]))
+		log.Println("PrvI:", d.status)
+	default:
+		//log.Printf("%s: %v\n", n, p)
 	}
 }
 
@@ -159,23 +188,46 @@ func (d *Device) readSid(p []byte) {
 		return
 	}
 
-	log.Println(p[2:4], " ", d.sid)
-
 	d.sid = sid
 }
 
 // send packet
 func (d *Device) sendPacket(p []byte) {
-	d.conn.Write(p)
+	d.conn.WriteTo(p, d.remoteAddr)
 	if d.debug {
-		log.Println("Sent: ", p)
+		log.Println("Sent:", p)
 	}
+}
+
+func (d *Device) SendCommand(n string, p []byte) {
+	d.lpid += 1
+
+	l := 20 + len(p)
+	b := make([]byte, l)
+
+	b[0] = uint8(l>>0x08 | 0x08)
+	b[1] = uint8(l & 0xff)
+	b[2] = uint8(d.sid >> 0x08)
+	b[3] = uint8(d.sid & 0xff)
+	b[10] = uint8(d.lpid >> 0x08)
+	b[11] = uint8(d.lpid & 0xff)
+	b[12] = uint8((8 + len(n)) >> 0x08)
+	b[13] = uint8((8 + len(n)) & 0xff)
+
+	for i := 0; i < len(n); i++ {
+		b[16+i] = n[i]
+	}
+	for i := 0; i < len(p); i++ {
+		b[20+i] = p[i]
+	}
+
+	d.sendPacket(b)
 }
 
 func (d *Device) sendPacketHello() {
 	d.sendPacket(helloPacket)
 	//d.outPacket <- helloPacket
-	d.state = stateSynsent
+	d.connState = connStateSynsent
 }
 
 func (d *Device) sendPacketAnswer() {
@@ -184,15 +236,16 @@ func (d *Device) sendPacketAnswer() {
 }
 
 func (d *Device) sendPacketPong(p []byte) {
-	data := make([]byte, 12)
+	b := make([]byte, 12)
 
-	data[0] = 128
-	data[1] = 12
-	data[2] = p[2]
-	data[3] = p[3]
-	data[4] = p[10]
-	data[5] = p[11]
+	b[0] = 128
+	b[1] = 12
+	b[2] = p[2]
+	b[3] = p[3]
+	b[4] = p[10]
+	b[5] = p[11]
 
-	d.sendPacket(data)
-	//d.outPacket <- data
+	//d.outPacket <- buf
+	time.Sleep(time.Second)
+	d.sendPacket(b)
 }

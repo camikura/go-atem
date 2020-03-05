@@ -7,13 +7,14 @@ import (
 )
 
 var (
-	debug = flag.Bool("debug", false, "Connection debugging")
+	ip    = flag.String("ip", "", "")
+	debug = flag.Bool("debug", false, "")
 )
 
 func main() {
 	flag.Parse()
 
-	device := atem.NewDevice("192.168.10.242", 9910, *debug)
+	device := atem.NewDevice(*ip, 9910, *debug)
 	device.On("connect", connected)
 	device.Connect()
 }

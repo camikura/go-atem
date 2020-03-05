@@ -246,6 +246,5 @@ func (d *Device) sendPacketPong(p []byte) {
 	b[5] = p[11]
 
 	//d.outPacket <- buf
-	time.Sleep(time.Second)
 	d.sendPacket(b)
 }

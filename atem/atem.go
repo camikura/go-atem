@@ -113,17 +113,14 @@ func (d *Device) recvPacket(p []byte) {
 	}
 
 	if flag&flagSync > 0 {
+		d.readSid(p)
+		d.sendPacketPong(p)
 		if len(p) > 12 {
 			d.parseCommand(p[12:])
 		}
-		if len(p) == 12 {
-			if d.state == stateSynsent {
-				d.state = stateEstablished
-				fmt.Println("connected!!!")
-			} else {
-				d.readSid(p)
-				d.sendPacketPong(p)
-			}
+		if len(p) == 12 && d.state == stateSynsent {
+			d.state = stateEstablished
+			fmt.Println("connected!!!")
 		}
 	}
 }

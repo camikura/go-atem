@@ -6,6 +6,10 @@
 
     go get github.com/camikura/go-atem
 
+## Usage
+
+    go run examples/basic/basic.go -ip 192.168.10.240 -port 9910
+
 ## Example
 
 See `examples` directory

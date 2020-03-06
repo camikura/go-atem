@@ -20,20 +20,38 @@ func main() {
 	flag.Parse()
 
 	device = atem.NewDevice(*ip, *port, *debug)
-	device.On("connected", connected)
-	device.On("topologyChanged", topologyChanged)
-	device.On("statusChanged", statusChanged)
+
+	device.OnConnected = connected
+	device.OnReceivedCommand = receivedCommand
+	device.OnChangedProgramInput = changedProgramInput
+	device.OnChangedPreviewInput = changedPreviewInput
+	device.OnChangedTransition = changedTransition
+	device.OnChangedTransitionPosition = changedTransitionPosition
+
 	device.Connect()
 }
 
-func connected() {
-	log.Println("conn: connected")
+func connected(d *atem.Device) {
+	log.Println("connected to", d.ProductId)
 }
 
-func topologyChanged() {
-	log.Println("topo:", device.Topology)
+// for debug
+func receivedCommand(d *atem.Device, c string, p []byte) {
+	//log.Println("got command", c, p)
 }
 
-func statusChanged() {
-	log.Println("stats:", device.Status)
+func changedProgramInput(d *atem.Device, m int, s atem.Source) {
+	log.Println("changed program input", m, s.Id, s.Longname, s.Shortname)
+}
+
+func changedPreviewInput(d *atem.Device, m int, s atem.Source) {
+	log.Println("changed preview input", m, s.Id, s.Longname, s.Shortname)
+}
+
+func changedTransition(d *atem.Device, m int, t atem.Transition) {
+	log.Println("change transition", m, t.Style)
+}
+
+func changedTransitionPosition(d *atem.Device, m int, t atem.TransitionPosition) {
+	log.Println("change transition position", m, t.InTransition, t.FrameRemaining, t.Position)
 }

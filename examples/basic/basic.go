@@ -41,13 +41,11 @@ func main() {
 	s := 1
 	for {
 		device.ChangeProgramInput(0, s)
-		s += 1
-		if s > 10 {
+		if s += 1; s > 10 {
 			s = 1
 		}
 		time.Sleep(time.Second * 3)
 	}
-
 }
 
 func receivedWarning(d *atem.Device, m string) {

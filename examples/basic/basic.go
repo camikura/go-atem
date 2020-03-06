@@ -4,6 +4,7 @@ import (
 	"flag"
 	"github.com/camikura/go-atem/atem"
 	"log"
+	"time"
 )
 
 var (
@@ -19,7 +20,7 @@ func main() {
 
 	device = atem.NewDevice(*ip, *port, *debug)
 
-	device.OnConnected = connected
+	device.OnConnected = func(d *atem.Device) { d.SayConnectedMessage() }
 
 	device.OnReceivedWarning = receivedWarning
 	device.OnReceivedCommand = receivedCommand
@@ -32,14 +33,21 @@ func main() {
 	device.OnChangedTransitionPosition = changedTransitionPosition
 	device.OnChangedDownstreamKeyer = changedDownstreamKeyer
 
-	//device.OnChangedTallyByIndex = changedTallyByIndex
-	//device.OnChangedTallyBySource = changedTallyBySource
+	device.OnChangedTallyByIndex = changedTallyByIndex
+	device.OnChangedTallyBySource = changedTallyBySource
 
-	device.Connect()
-}
+	go device.Connect()
 
-func connected(d *atem.Device) {
-	log.Printf("connected to \"%s\", protocol version is %d.%d", d.ProductId, d.ProtocolVersionMajor, d.ProtocolVersionMinor)
+	s := 1
+	for {
+		device.ChangeProgramInput(0, s)
+		s += 1
+		if s > 10 {
+			s = 1
+		}
+		time.Sleep(time.Second * 3)
+	}
+
 }
 
 func receivedWarning(d *atem.Device, m string) {
@@ -86,17 +94,9 @@ func changedDownstreamKeyer(d *atem.Device, i int, k atem.DownstreamKeyer) {
 }
 
 func changedTallyByIndex(d *atem.Device, t atem.TallyByIndex) {
-	for i, l := range t {
-		s := d.InputProperty[i]
-		log.Println(l, s)
-	}
 	log.Println("changed tally by index", t)
 }
 
 func changedTallyBySource(d *atem.Device, t atem.TallyBySource) {
-	for i, l := range t {
-		s := d.InputProperty[i]
-		log.Println(l, s)
-	}
 	log.Println("changed tally by source", t)
 }

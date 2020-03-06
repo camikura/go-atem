@@ -182,17 +182,13 @@ func (d *Device) IsConnected() bool {
 }
 
 func (d *Device) waitPacket() {
-	f := make(chan bool)
-	go func(f chan bool) {
-		for {
-			b := make([]byte, 4096)
-			d.conn.SetReadDeadline(time.Now().Add(time.Second))
-			if l, _ := d.conn.Read(b); l > 0 {
-				d.inPacket <- b[:l]
-			}
+	for {
+		b := make([]byte, 4096)
+		d.conn.SetReadDeadline(time.Now().Add(time.Second))
+		if l, _ := d.conn.Read(b); l > 0 {
+			d.inPacket <- b[:l]
 		}
-	}(f)
-	<-f
+	}
 }
 
 func (d *Device) recvPacket() {
@@ -394,18 +390,28 @@ func (d *Device) Auto(m int) {
 	d.SendCommand("DAut", []byte{uint8(m), 0, 0, 0})
 }
 
+func (d *Device) ChangeProgramInput(m int, s int) {
+	d.SendCommand("CPgI", []byte{uint8(m), 0, byte(s >> 0x08), byte(s & 0xff)})
+}
+
+func (d *Device) ChangePreviewInput(m int, s int) {
+	d.SendCommand("CPvI", []byte{uint8(m), 0, byte(s >> 0x08), byte(s & 0xff)})
+}
+
 // send packet
 func (d *Device) sendPacket() {
 	for {
 		p := <-d.outPacket
-		if d.IsConnected() {
-			d.conn.Write(p)
-			d.debug(fmt.Sprintf(">> %v", p))
-		}
+		d.conn.Write(p)
+		d.debug(fmt.Sprintf(">> %v", p))
 	}
 }
 
 func (d *Device) SendCommand(n string, p []byte) {
+	if !d.IsConnected() {
+		return
+	}
+
 	d.lastLocalPacketID += 1
 
 	l := 20 + len(p)

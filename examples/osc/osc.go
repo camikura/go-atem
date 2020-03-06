@@ -14,11 +14,6 @@ var (
 )
 
 func main() {
-	for {
-	}
-}
-
-func init() {
 	flag.Parse()
 
 	initAtem()

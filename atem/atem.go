@@ -177,20 +177,21 @@ func (d *Device) connect() error {
 	return nil
 }
 
+func (d *Device) IsConnected() bool {
+	return d.ConnState == ConnStateConnected
+}
+
 func (d *Device) waitPacket() {
 	f := make(chan bool)
-
 	go func(f chan bool) {
 		for {
 			b := make([]byte, 4096)
 			d.conn.SetReadDeadline(time.Now().Add(time.Second))
 			if l, _ := d.conn.Read(b); l > 0 {
 				d.inPacket <- b[:l]
-				//d.recvPacket(b[:l])
 			}
 		}
 	}(f)
-
 	<-f
 }
 
@@ -384,12 +385,23 @@ func (d *Device) readCommand(n string, p []byte) {
 	}
 }
 
+// exec command
+func (d *Device) Cut(m int) {
+	d.SendCommand("DCut", []byte{uint8(m), 0, 0, 0})
+}
+
+func (d *Device) Auto(m int) {
+	d.SendCommand("DAut", []byte{uint8(m), 0, 0, 0})
+}
+
 // send packet
 func (d *Device) sendPacket() {
 	for {
 		p := <-d.outPacket
-		d.conn.Write(p)
-		d.debug(fmt.Sprintf(">> %v", p))
+		if d.IsConnected() {
+			d.conn.Write(p)
+			d.debug(fmt.Sprintf(">> %v", p))
+		}
 	}
 }
 
@@ -416,18 +428,15 @@ func (d *Device) SendCommand(n string, p []byte) {
 	}
 
 	d.outPacket <- b
-	//d.sendPacket(b)
 }
 
 func (d *Device) sendPacketStart() {
 	d.outPacket <- startPacket
-	//d.sendPacket(startPacket)
 	d.ConnState = ConnStateConnecting
 }
 
 func (d *Device) sendPacketHelloAnswer() {
 	d.outPacket <- helloAnswerPacket
-	//d.sendPacket(helloAnswerPacket)
 }
 
 func (d *Device) sendPacketAck(r uint16) {
@@ -441,10 +450,13 @@ func (d *Device) sendPacketAck(r uint16) {
 	b[5] = uint8(r & 0xff)
 
 	d.outPacket <- b
-	//d.sendPacket(b)
 }
 
 // tools
+func (d *Device) SayConnectedMessage() {
+	log.Printf("connected to \"%s\", protocol version is %d.%d\n", d.ProductId, d.ProtocolVersionMajor, d.ProtocolVersionMinor)
+}
+
 func (d *Device) createStringFromByte(b []byte) string {
 	if l := bytes.IndexByte(b, 0); l >= 0 {
 		return string(b[:l])

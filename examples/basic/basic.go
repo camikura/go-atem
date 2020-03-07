@@ -29,6 +29,7 @@ func main() {
 	device.OnChangedMacroRunStatus = changedMacroRunStatus
 	device.OnChangedProgramInput = changedProgramInput
 	device.OnChangedPreviewInput = changedPreviewInput
+	device.OnChangedAuxSource = changedAuxSource
 	device.OnChangedTransition = changedTransition
 	device.OnChangedTransitionPosition = changedTransitionPosition
 	device.OnChangedDownstreamKeyer = changedDownstreamKeyer
@@ -77,6 +78,10 @@ func changedProgramInput(d *atem.Device, m int, i int, s atem.Source) {
 
 func changedPreviewInput(d *atem.Device, m int, i int, s atem.Source) {
 	log.Println("changed preview input", m, i, s.Longname, s.Shortname)
+}
+
+func changedAuxSource(d *atem.Device, i int, s atem.Source, a atem.AuxProperty) {
+	log.Println("changed aux source", i, a.Longname, s.Longname)
 }
 
 func changedTransition(d *atem.Device, m int, t atem.Transition) {

@@ -36,6 +36,8 @@ type Device struct {
 	Transition           []Transition
 	TransitionPosition   []TransitionPosition
 	DownstreamKeyer      []DownstreamKeyer
+	AuxProperty          []Source
+	AuxSource            []Source
 
 	InputProperty map[int]Source
 	MacroProperty map[int]Macro
@@ -53,6 +55,7 @@ type Device struct {
 	OnChangedMacroRunStatus     func(d *Device, id int, macro Macro, macroRunStatus MacroRunStatus)
 	OnChangedProgramInput       func(d *Device, me int, id int, source Source)
 	OnChangedPreviewInput       func(d *Device, me int, id int, source Source)
+	OnChangedAuxSource          func(d *Device, index int, source Source, auxProperty AuxProperty)
 	OnChangedTransition         func(d *Device, me int, transition Transition)
 	OnChangedTransitionPosition func(d *Device, me int, transitionPosition TransitionPosition)
 	OnChangedDownstreamKeyer    func(d *Device, index int, downstreamKeyer DownstreamKeyer)
@@ -64,7 +67,10 @@ type Topology struct {
 	Mes, Sources, ColorGenerators, Auxs, DownstreamKeyers, Stingers, Dves, Supersources int
 }
 
-type Source struct{ Longname, Shortname string }
+type Source struct {
+	Id, PortType        int
+	Longname, Shortname string
+}
 
 type Tally struct{ Program, Preview bool }
 
@@ -78,9 +84,8 @@ type MacroRunStatus struct{ IsRunning, IsWaiting, IsLooping bool }
 type Transition struct{ Style int }
 
 type TransitionPosition struct {
-	FrameRemaining int
-	InTransition   bool
-	Position       float32
+	FrameRemaining, Position int
+	InTransition             bool
 }
 
 type DownstreamKeyer struct {
@@ -94,9 +99,11 @@ type PreviewInput []Source
 type TallyByIndex map[int]Tally
 type TallyBySource map[int]Tally
 
+type AuxProperty Source
+
 var (
-	startPacket       = []byte{0x10, 0x14, 0x0e, 0x58, 0x00, 0x00, 0x00, 0x00, 0x00, 0x26, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
-	helloAnswerPacket = []byte{0x80, 0x0c, 0x0e, 0x58, 0x00, 0x00, 0x00, 0x00, 0x00, 0xfd, 0x00, 0x00}
+	startPacket = []byte{0x10, 0x14, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x26, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
+	ackPacket   = []byte{0x80, 0x0c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
 )
 
 const (
@@ -140,6 +147,7 @@ func (d *Device) registerCallback() {
 	d.OnChangedMacroRunStatus = func(d *Device, id int, macro Macro, macrRunStatus MacroRunStatus) {}
 	d.OnChangedProgramInput = func(d *Device, me int, id int, source Source) {}
 	d.OnChangedPreviewInput = func(d *Device, me int, id int, source Source) {}
+	d.OnChangedAuxSource = func(d *Device, index int, source Source, auxProperty AuxProperty) {}
 	d.OnChangedTransition = func(d *Device, me int, transition Transition) {}
 	d.OnChangedTransitionPosition = func(d *Device, me int, transitionPosition TransitionPosition) {}
 	d.OnChangedDownstreamKeyer = func(d *Device, index int, downstreamKeyer DownstreamKeyer) {}
@@ -199,7 +207,7 @@ func (d *Device) recvPacket() {
 
 		// hello answer
 		if flag&flagHelloPacket > 0 {
-			d.sendPacketHelloAnswer()
+			d.sendPacketAck(0)
 		}
 
 		// connected
@@ -284,6 +292,8 @@ func (d *Device) readCommand(n string, p []byte) {
 
 		d.ProgramInput = make([]Source, d.Topology.Mes)
 		d.PreviewInput = make([]Source, d.Topology.Mes)
+		d.AuxProperty = make([]Source, d.Topology.Auxs)
+		d.AuxSource = make([]Source, d.Topology.Auxs)
 		d.Transition = make([]Transition, d.Topology.Mes)
 		d.TransitionPosition = make([]TransitionPosition, d.Topology.Mes)
 
@@ -293,8 +303,12 @@ func (d *Device) readCommand(n string, p []byte) {
 		i := int(binary.BigEndian.Uint16(p[0:2])) // input
 		ln := d.createStringFromByte(p[2:22])     // longname
 		sn := d.createStringFromByte(p[22:26])    // shortname
-		s := Source{Longname: ln, Shortname: sn}
+		t := int(p[32])                           // port type
+		s := Source{Id: i, PortType: t, Longname: ln, Shortname: sn}
 		d.InputProperty[i] = s
+		if s.PortType == 129 {
+			d.AuxProperty[i-8001] = s
+		}
 		d.OnChangedInputProperty(d, i, s)
 
 	case "MPrp":
@@ -339,10 +353,10 @@ func (d *Device) readCommand(n string, p []byte) {
 		d.OnChangedTransition(d, m, t)
 
 	case "TrPs":
-		m := int(p[0])                                         // me
-		i := p[1]&0x01 > 0                                     // in transition
-		r := int(p[2])                                         // frame remaining
-		p := float32(binary.BigEndian.Uint16(p[4:6])) * 0.0001 // position
+		m := int(p[0])                            // me
+		i := p[1]&0x01 > 0                        // in transition
+		r := int(p[2])                            // frame remaining
+		p := int(binary.BigEndian.Uint16(p[4:6])) // position
 		t := TransitionPosition{InTransition: i, FrameRemaining: r, Position: p}
 		d.TransitionPosition[m] = t
 		d.OnChangedTransitionPosition(d, m, t)
@@ -356,6 +370,14 @@ func (d *Device) readCommand(n string, p []byte) {
 		dsk := DownstreamKeyer{OnAir: o, InTransition: i, IsAutoTransitioning: a, FrameRemaining: r}
 		d.DownstreamKeyer[k] = dsk
 		d.OnChangedDownstreamKeyer(d, k, dsk)
+
+	case "AuxS":
+		i := int(p[0]) // index
+		c := int(binary.BigEndian.Uint16(p[2:4]))
+		s := d.InputProperty[c]
+		a := d.AuxProperty[i]
+		d.AuxSource[i] = s
+		d.OnChangedAuxSource(d, i, s, AuxProperty(a))
 
 	case "TlIn":
 		l := int(binary.BigEndian.Uint16(p[0:2]))
@@ -382,26 +404,107 @@ func (d *Device) readCommand(n string, p []byte) {
 }
 
 // exec command
-func (d *Device) Cut(m int) {
-	d.SendCommand("DCut", []byte{uint8(m), 0, 0, 0})
+func (d *Device) Cut(me int) {
+	d.SendCommand("DCut", []byte{byte(me), 0, 0, 0})
 }
 
-func (d *Device) Auto(m int) {
-	d.SendCommand("DAut", []byte{uint8(m), 0, 0, 0})
+func (d *Device) Auto(me int) {
+	d.SendCommand("DAut", []byte{byte(me), 0, 0, 0})
 }
 
-func (d *Device) ChangeProgramInput(m int, s int) {
-	d.SendCommand("CPgI", []byte{uint8(m), 0, byte(s >> 0x08), byte(s & 0xff)})
+func (d *Device) ChangeProgramInput(me int, source int) {
+	d.SendCommand("CPgI", []byte{byte(me), 0, byte(source >> 0x08), byte(source & 0xff)})
 }
 
-func (d *Device) ChangePreviewInput(m int, s int) {
-	d.SendCommand("CPvI", []byte{uint8(m), 0, byte(s >> 0x08), byte(s & 0xff)})
+func (d *Device) ChangePreviewInput(me int, source int) {
+	d.SendCommand("CPvI", []byte{byte(me), 0, byte(source >> 0x08), byte(source & 0xff)})
+}
+
+func (d *Device) ChangeTransition(me int, style int, nextTransition []bool) {
+	m := d.createBits([]bool{style >= 0, len(nextTransition) > 0})
+	b := d.createBits(nextTransition)
+	d.SendCommand("CTTp", []byte{m, byte(me), byte(style), b})
+}
+
+func (d *Device) ChangeTransitionPosition(me int, position int) {
+	d.SendCommand("CTPs", []byte{byte(me), 0, byte(position >> 0x08), byte(position & 0xff)})
+}
+
+func (d *Device) ChangeKeyerOnAir(me int, keyer int, onair bool) {
+	b := 0
+	if onair {
+		b |= 1
+	}
+	d.SendCommand("CKOn", []byte{byte(me), byte(keyer), byte(b), 0})
+}
+
+func (d *Device) ChangeAuxSource(index int, source int) {
+	d.SendCommand("CAuS", []byte{0x01, byte(index), byte(source >> 0x08), byte(source & 0xff)})
+}
+
+func (d *Device) DownstreamKeyerAuto(keyer int) {
+	d.SendCommand("DDsA", []byte{byte(keyer), 0x00, 0x00, 0x00})
+}
+
+func (d *Device) ChangeDownstreamKeyerTie(keyer int, tie bool) {
+	b := 0
+	if tie {
+		b |= 1
+	}
+	d.SendCommand("CDsT", []byte{byte(keyer), byte(b), 0x00, 0x00})
+}
+
+func (d *Device) ChangeDownstreamKeyerRate(keyer int, rate int) {
+	d.SendCommand("CDsR", []byte{byte(keyer), byte(rate), 0x00, 0x00})
+}
+
+func (d *Device) ChangeDownstreamKeyerOnAir(keyer int, onair bool) {
+	b := 0
+	if onair {
+		b |= 1
+	}
+	d.SendCommand("CDsL", []byte{byte(keyer), byte(b), 0x00, 0x00})
+}
+
+func (d *Device) ChangeSuperSourceBoxParameters(b []byte) {
+	d.SendCommand("CSBP", b)
+}
+
+func (d *Device) ChangeSuperSourceBoxParametersEnabled(box int, enabled bool) {
+	b := make([]byte, 24)
+	b[0] = byte(0x01)
+	if enabled {
+		b[1] |= 1
+	}
+	d.ChangeSuperSourceBoxParameters(b)
+}
+
+func (d *Device) ChangeSuperSourceBoxParametersSource(box int, source int) {
+	b := make([]byte, 24)
+	b[0] = byte(0x02)
+	b[4] = byte(source >> 0x08)
+	b[5] = byte(source & 0xff)
+	d.ChangeSuperSourceBoxParameters(b)
+}
+
+func (d *Device) createBits(f []bool) byte {
+	bits := byte(0)
+	for i, b := range f {
+		if b {
+			bits |= 1 << (len(f) - i - 1)
+		}
+	}
+	return bits
 }
 
 // send packet
 func (d *Device) sendPacket() {
 	for {
 		p := <-d.outPacket
+
+		p[2] = uint8(d.sessionID >> 0x08)
+		p[3] = uint8(d.sessionID & 0xff)
+
 		d.conn.Write(p)
 		d.debug(fmt.Sprintf(">> %v", p))
 	}
@@ -419,8 +522,6 @@ func (d *Device) SendCommand(n string, p []byte) {
 
 	b[0] = uint8(l>>0x08 | 0x08)
 	b[1] = uint8(l & 0xff)
-	b[2] = uint8(d.sessionID >> 0x08)
-	b[3] = uint8(d.sessionID & 0xff)
 	b[10] = uint8(d.lastLocalPacketID >> 0x08)
 	b[11] = uint8(d.lastLocalPacketID & 0xff)
 	b[12] = uint8((8 + len(n)) >> 0x08)
@@ -441,17 +542,10 @@ func (d *Device) sendPacketStart() {
 	d.ConnState = ConnStateConnecting
 }
 
-func (d *Device) sendPacketHelloAnswer() {
-	d.outPacket <- helloAnswerPacket
-}
-
 func (d *Device) sendPacketAck(r uint16) {
-	b := make([]byte, 12)
+	b := ackPacket
 
-	b[0] = 128
-	b[1] = 12
-	b[2] = uint8(d.sessionID >> 0x08)
-	b[3] = uint8(d.sessionID & 0xff)
+	// set remote packet id
 	b[4] = uint8(r >> 0x08)
 	b[5] = uint8(r & 0xff)
 

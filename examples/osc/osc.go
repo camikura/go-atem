@@ -18,6 +18,9 @@ func main() {
 
 	initAtem()
 	initOSC()
+
+	for {
+	}
 }
 
 func initOSC() {

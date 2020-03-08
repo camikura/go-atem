@@ -21,6 +21,7 @@ func main() {
 	device = atem.NewDevice(*ip, *port, *debug)
 
 	device.OnConnected = func(d *atem.Device) { d.SayConnectedMessage() }
+	device.OnClosed = func(d *atem.Device) { d.SayClosedMessage() }
 
 	device.OnReceivedWarning = receivedWarning
 	device.OnReceivedCommand = receivedCommand

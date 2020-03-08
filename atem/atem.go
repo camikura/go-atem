@@ -46,6 +46,7 @@ type Device struct {
 
 	// callback
 	OnConnected func(d *Device)
+	OnClosed    func(d *Device)
 
 	OnReceivedWarning func(d *Device, message string)
 	OnReceivedCommand func(d *Device, command string, data []byte)
@@ -140,6 +141,8 @@ func NewDevice(ip string, port int, debugmode bool) *Device {
 
 func (d *Device) registerCallback() {
 	d.OnConnected = func(d *Device) {}
+	d.OnClosed = func(d *Device) {}
+
 	d.OnReceivedWarning = func(d *Device, message string) {}
 	d.OnReceivedCommand = func(d *Device, command string, data []byte) {}
 	d.OnChangedInputProperty = func(d *Device, id int, source Source) {}
@@ -161,6 +164,10 @@ func (d *Device) Connect() {
 		time.Sleep(time.Second * 3)
 		d.Connect()
 	}
+}
+
+func (d *Device) Close() {
+	d.ConnState = ConnStateClosed
 }
 
 func (d *Device) connect() error {
@@ -185,12 +192,18 @@ func (d *Device) connect() error {
 	return nil
 }
 
-func (d *Device) IsConnected() bool {
-	return d.ConnState == ConnStateConnected
-}
+func (d *Device) IsClosed() bool     { return d.ConnState == ConnStateClosed }
+func (d *Device) IsConnecting() bool { return d.ConnState == ConnStateConnecting }
+func (d *Device) IsConnected() bool  { return d.ConnState == ConnStateConnected }
 
 func (d *Device) waitPacket() {
-	for {
+	defer func() {
+		d.OnClosed(d)
+		d.sessionID = 0
+		d.lastLocalPacketID = 0
+	}()
+
+	for !d.IsClosed() {
 		b := make([]byte, 4096)
 		d.conn.SetReadDeadline(time.Now().Add(time.Second))
 		if l, _ := d.conn.Read(b); l > 0 {
@@ -211,12 +224,12 @@ func (d *Device) recvPacket() {
 		}
 
 		// connected
-		if flag&flagAck > 0 && d.ConnState != ConnStateConnected {
+		if flag&flagAck > 0 && d.IsConnecting() {
 			d.ConnState = ConnStateConnected
 			d.OnConnected(d)
 		}
 
-		if flag&flagAckRequest > 0 {
+		if flag&flagAckRequest > 0 && !d.IsClosed() {
 			d.sessionID = binary.BigEndian.Uint16(p[2:4]) // session id
 			r := binary.BigEndian.Uint16(p[10:12])        // remote packet id
 
@@ -555,6 +568,10 @@ func (d *Device) sendPacketAck(r uint16) {
 // tools
 func (d *Device) SayConnectedMessage() {
 	log.Printf("connected to \"%s\", protocol version is %d.%d\n", d.ProductId, d.ProtocolVersionMajor, d.ProtocolVersionMinor)
+}
+
+func (d *Device) SayClosedMessage() {
+	log.Printf("disconnected to \"%s\"\n", d.ProductId)
 }
 
 func (d *Device) createStringFromByte(b []byte) string {

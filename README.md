@@ -4,7 +4,7 @@
 
 ## Getting Started
 
-    go get github.com/camikura/go-atem
+    go get github.com/camikura/go-atem/atem
 
 ## Usage
 

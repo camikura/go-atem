@@ -2,9 +2,10 @@ package main
 
 import (
 	"flag"
-	"github.com/camikura/go-atem/atem"
 	"log"
 	"time"
+
+	"github.com/camikura/go-atem/atem"
 )
 
 var (

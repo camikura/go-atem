@@ -443,6 +443,10 @@ func (d *Device) ChangeTransitionPosition(me int, position int) {
 	d.SendCommand("CTPs", []byte{byte(me), 0, byte(position >> 0x08), byte(position & 0xff)})
 }
 
+func (d *Device) ChangeTransitionMixRate(me int, rate int) {
+	d.SendCommand("CTMx", []byte{byte(me), byte(rate), 0, 0})
+}
+
 func (d *Device) ChangeKeyerOnAir(me int, keyer int, onair bool) {
 	b := 0
 	if onair {

@@ -425,6 +425,16 @@ func (d *Device) Auto(me int) {
 	d.SendCommand("DAut", []byte{byte(me), 0, 0, 0})
 }
 
+func (d *Device) RunMacro(source int) {
+	payload := make([]byte, 4)
+	payload[0] = byte(source >> 8)   // high
+	payload[1] = byte(source & 0xff) // low
+	payload[2] = 0x00
+	payload[3] = 0x00
+
+	d.SendCommand("MAct", payload)
+}
+
 func (d *Device) ChangeProgramInput(me int, source int) {
 	d.SendCommand("CPgI", []byte{byte(me), 0, byte(source >> 0x08), byte(source & 0xff)})
 }
